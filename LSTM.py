@@ -14,7 +14,7 @@ from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from math import sqrt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_error
 from tsai.models.utils import *
-criterion = nn.CrossEntropyLoss()
+
 
 
 def check_error(orig, pred, name_col='', index_name=''):
@@ -137,11 +137,21 @@ def test_model(data_loader, model, loss_function):
     with torch.no_grad():
         for X, y in data_loader:
             output = model(X)
-            total_loss += loss_function(output, y).item()
+            total_loss += loss_function(output, y)
 
     avg_loss = total_loss / num_batches
     print(f"Test loss: {avg_loss}")
     return avg_loss
+
+def predict(data_loader, model):
+
+    output = torch.tensor([])
+    model.eval()
+    with torch.no_grad():
+        for X, _ in data_loader:
+            y_star = model(X)
+            output = torch.cat((output, y_star), 0)
+    return output
 
 def create_graph(df, name):
     plot_template = dict(
@@ -368,15 +378,7 @@ for ix_epoch in range(50):
     print()
 
 
-def predict(data_loader, model):
 
-    output = torch.tensor([])
-    model.eval()
-    with torch.no_grad():
-        for X, _ in data_loader:
-            y_star = model(X)
-            output = torch.cat((output, y_star), 0)
-    return output
 
 
 train_eval_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
@@ -385,7 +387,6 @@ train_eval_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=Fal
 
 ystar_col = "Model forecast"
 df_train[ystar_col] = predict(train_eval_loader, model).numpy()
-
 df_test[ystar_col] = predict(test_loader, model).numpy()
 
 df_out = pd.concat((df_train, df_test))[[target, ystar_col]]
