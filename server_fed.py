@@ -63,8 +63,12 @@ def create_loss_graph(y1, y2, model_name):
     plt.savefig('Resultados/' +str(model_name)+ '_loss-graf_federado.png')
     # plt.show()
 
-def plot_real_pred_alone(df_out, model_name):
+def plot_real_pred_alone(df_out, model_name, test_start):
     #Creating graph
+
+    df_completo = df_out.index
+    test_start = df_completo[test_start]
+
 
     df_out = df_out.rename(columns={"Model forecast": "Predicted"})
     plot_template = dict(
@@ -300,7 +304,7 @@ if __name__ == "__main__":
 
     Manager.run()
 
-    trainloader, testloader = load_data()
+    #trainloader, testloader = load_data()
 
 
 
@@ -334,10 +338,18 @@ if __name__ == "__main__":
     target = f"{target_sensor}_lead{forecast_lead}"
     df[target] = df[target_sensor].shift(-forecast_lead)
     df = df.iloc[:-forecast_lead]
-    test_start = "2019-01-20"
-    df_train = df.loc[:test_start].copy()
-    df_test = df.loc[test_start:].copy()
-    print("Test set fraction:", len(df_test) / len(df))
+
+    # divide data into train and test
+    train_ind = int(len(df) * 0.8)
+    df_train = df[:train_ind].copy()
+    df_test = df[train_ind:].copy()
+    print(df_train.head())
+    print(df_test.head())
+    train_length = df_train.shape[0]
+    test_length = df_test.shape[0]
+    print('Server: Training size: ', train_length)
+    print('Server: Test size: ', test_length)
+    print('Server: Test ratio: ', test_length / (test_length + train_length))
 
     target_mean = df_train[target].mean()
     target_stdev = df_train[target].std()
@@ -380,11 +392,10 @@ if __name__ == "__main__":
     for c in df_out.columns:
         df_out[c] = df_out[c] * target_stdev + target_mean
 
-    #print(df_out)
 
     df_out.rename(columns={df_out.columns[0]: "Real"}, inplace=True)  # Rename Pandas Dataframe
     plot_real_pred_detailed(df_out, "LSTM")
-    plot_real_pred_alone(df_out.iloc[:, :-1], "LSTM")
+    plot_real_pred_alone(df_out.iloc[:, :-1], "LSTM", train_ind)
     check_error(df_out[['Real']].to_numpy(), df_out[['Model forecast']].to_numpy(), name_col="LSTM")
     #create_loss_graph(train_loss, test_loss, "LSTM")
 

@@ -79,11 +79,21 @@ class SequenceDataset(Dataset):
 
         return x, self.y[i]
 
-def load_data():
+def load_data(client_id):
     file_name = "dataset.pkl"
-
     df = pd.read_pickle(file_name)
-    df = df['LesCorts']
+
+    '''Choose one dataset for each client'''
+    if client_id == 1:
+        df = df['ElBorn']
+    elif client_id == 2:
+        df = df['LesCorts']
+    elif client_id == 3:
+        df = df['PobleSec']
+    else:
+        print("Number of clients > dataset")
+
+
     df.set_index(df.iloc[:, 0].name)
     df.index.names = ['TimeStamp']
 
@@ -110,7 +120,6 @@ def load_data():
     df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
                 df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
     df = df_min_max_scaled
-    #print(df)
     #create_graph(df_min_max_scaled, "DF_Normalized")
     #exit()
 
@@ -123,13 +132,26 @@ def load_data():
     df[target] = df[target_sensor].shift(-forecast_lead)
     df = df.iloc[:-forecast_lead]
 
+    # divide data into train and test
+    train_ind = int(len(df) * 0.8)
+    df_train = df[:train_ind].copy()
+    df_test = df[train_ind:].copy()
+    print(df_train.head())
+    print(df_test.head())
+    train_length = df_train.shape[0]
+    test_length = df_test.shape[0]
+    print('Training size: ', train_length)
+    print('Test size: ', test_length)
+    print('Test ratio: ', test_length / (test_length + train_length))
 
+    '''
     test_start = "2019-01-20"
     df_train = df.loc[:test_start].copy()
     df_test = df.loc[test_start:].copy()
     print("Test set fraction:", len(df_test) / len(df))
+    '''
 
-
+    '''
     target_mean = df_train[target].mean()
     target_stdev = df_train[target].std()
     for c in df_train.columns:
@@ -137,7 +159,7 @@ def load_data():
         stdev = df_train[c].std()
         df_train[c] = (df_train[c] - mean) / stdev
         df_test[c] = (df_test[c] - mean) / stdev
-
+    '''''
 
     #reating the dataset and the data loaders for real
     torch.manual_seed(101)
@@ -244,7 +266,7 @@ parser.add_argument('--ip', type=str, default='127.0.0.1')
 parser.add_argument('--port', type=str, default='3002')
 parser.add_argument('--world_size', type=int)
 parser.add_argument('--rank', type=int)
-
+parser.add_argument('--client_id', type=int, default=1)
 parser.add_argument("--epochs", type=int, default=2)
 parser.add_argument("--lr", type=float, default=0.1)
 parser.add_argument("--batch_size", type=int, default=100)
@@ -258,7 +280,7 @@ else:
 
 model = ShallowRegressionLSTM(num_sensors=11, hidden_units=16)
 
-trainloader, testloader = load_data()
+trainloader, testloader = load_data(args.client_id)
 
 
 print("type: "+str(trainloader))
