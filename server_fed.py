@@ -63,7 +63,7 @@ def create_loss_graph(y1, y2, model_name):
     plt.savefig('Resultados/' +str(model_name)+ '_loss-graf_federado.png')
     # plt.show()
 
-def plot_real_pred_alone(df_out, model_name, test_start):
+def plot_real_pred_alone(df_out, model_name, test_start, graph_image_name):
     #Creating graph
 
     df_completo = df_out.index
@@ -84,9 +84,9 @@ def plot_real_pred_alone(df_out, model_name, test_start):
     fig.update_layout(
         template=plot_template, legend=dict(orientation='h', y=1.02, title_text="")
     )
-    fig.write_image("Resultados/"+str(model_name)+"_Real_versus_Pred_graph_federado.png")
+    fig.write_image("Resultados/"+str(model_name)+ str("_")+ str(graph_image_name)+"_Real_versus_Pred_graph_federado-SERVER.png")
 
-def plot_real_pred_detailed(data, model_name, figsize=(12, 9), lags=24, rotation=0):
+def plot_real_pred_detailed(data, model_name, graph_image_name, figsize=(12, 9), lags=24, rotation=0):
     # Creating the column error
     data['Error'] = data.iloc[:, 0] - data.iloc[:, 1]
 
@@ -115,7 +115,7 @@ def plot_real_pred_detailed(data, model_name, figsize=(12, 9), lags=24, rotation
     plot_acf(data.iloc[:, 2], lags=lags, zero=False, ax=ax4)
     plt.tight_layout()
     plt.show()
-    plt.savefig("Resultados/" + str(model_name) + '_autoCorrelation_federado.png', bbox_inches='tight', pad_inches=0.1)
+    plt.savefig("Resultados/" + str(model_name) + str("_") + str(graph_image_name) + '_autoCorrelation_federado-SERVER.png', bbox_inches='tight', pad_inches=0.1)
 
 def create_graph(df, name):
     plot_template = dict(
@@ -289,6 +289,7 @@ if __name__ == "__main__":
     parser.add_argument('--ip', type=str, default='127.0.0.1')
     parser.add_argument('--port', type=str, default='3002')
     parser.add_argument('--world_size', type=int)
+    parser.add_argument('--client_id', type=int)
     args = parser.parse_args()
 
     model = ShallowRegressionLSTM(num_sensors=11, hidden_units=16)
@@ -304,13 +305,23 @@ if __name__ == "__main__":
 
     Manager.run()
 
-    #trainloader, testloader = load_data()
-
-
-
     file_name = "dataset.pkl"
     df = pd.read_pickle(file_name)
-    df = df['LesCorts']
+
+    '''Choose one dataset for each client'''
+    graph_image_name = ''
+    if args.client_id == 1:
+        df = df['ElBorn']
+        graph_image_name = 'ElBorn'
+    elif args.client_id == 2:
+        df = df['LesCorts']
+        graph_image_name = 'LesCorts'
+    elif args.client_id == 3:
+        df = df['PobleSec']
+        graph_image_name = 'PobleSec'
+    else:
+        print("Number of clients > dataset")
+
     df.set_index(df.iloc[:, 0].name)
     df.index.names = ['TimeStamp']
     data_columns = list(df.columns.values)
@@ -343,8 +354,8 @@ if __name__ == "__main__":
     train_ind = int(len(df) * 0.8)
     df_train = df[:train_ind].copy()
     df_test = df[train_ind:].copy()
-    print(df_train.head())
-    print(df_test.head())
+    #print(df_train.head())
+    #print(df_test.head())
     train_length = df_train.shape[0]
     test_length = df_test.shape[0]
     print('Server: Training size: ', train_length)
@@ -394,8 +405,8 @@ if __name__ == "__main__":
 
 
     df_out.rename(columns={df_out.columns[0]: "Real"}, inplace=True)  # Rename Pandas Dataframe
-    plot_real_pred_detailed(df_out, "LSTM")
-    plot_real_pred_alone(df_out.iloc[:, :-1], "LSTM", train_ind)
+    plot_real_pred_detailed(df_out, "LSTM", graph_image_name)
+    plot_real_pred_alone(df_out.iloc[:, :-1], "LSTM", train_ind, graph_image_name)
     check_error(df_out[['Real']].to_numpy(), df_out[['Model forecast']].to_numpy(), name_col="LSTM")
     #create_loss_graph(train_loss, test_loss, "LSTM")
 
