@@ -1,0 +1,7 @@
+        ResCNN
+              
+BIAS -0.287648
+MSE   0.083038
+RMSE  0.288163
+MAE   0.287648
+MAPE       inf

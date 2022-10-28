@@ -7,11 +7,10 @@ sys.path.append("../../")
 from fedlab.core.network import DistNetwork
 from fedlab.core.server.handler import AsyncParameterServerHandler
 from fedlab.core.server.manager import AsynchronousServerManager
+from fedlab.utils.logger import Logger
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
-import pandas as pd
-import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
@@ -20,21 +19,50 @@ import statsmodels.api as sm
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_error
 from math import sqrt
+from fedlab.core.client.manager import ActiveClientManager
+from fedlab.core.client.trainer import SGDClientTrainer
+from fedlab.utils.dataset.sampler import RawPartitionSampler
+from fedlab.core.network import DistNetwork
+from fedlab.utils.functional import AverageMeter, evaluate
+import statsmodels.api as sm
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_error
+from math import sqrt
+import warnings
+warnings.filterwarnings('ignore')
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import matplotlib as mpl
+from matplotlib import ticker
+from datetime import datetime, timedelta
+import statsmodels.api as sm
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from hyperopt import Trials, STATUS_OK, STATUS_FAIL, tpe, fmin, hp
+from hyperopt import space_eval
+
+import time
+from fastai.callback.tracker import EarlyStoppingCallback
+import gc
+
+import pickle
+from math import sqrt
+from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_absolute_error
+
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+
+import tsai
+from tsai.all import *
+
+
+model_name = "ResCNN"
 
 pio.templates.default = "plotly_white"
 
-def check_error(orig, pred, name_col='', index_name=''):
-    bias = np.mean(orig - pred)
-    mse = mean_squared_error(orig, pred)
-    rmse = sqrt(mean_squared_error(orig, pred))
-    mae = mean_absolute_error(orig, pred)
-    mape = np.mean(np.abs((orig - pred) / orig)) * 100
 
-    error_group = [bias, mse, rmse, mae, mape]
-    result = pd.DataFrame(error_group, index=['BIAS', 'MSE', 'RMSE', 'MAE', 'MAPE'], columns=[name_col])
-    result.index.name = index_name
-    print("Result: " + str(result))
-    return result
 
 def create_loss_graph(y1, y2, model_name):
     x = range(1, len(y2) + 1)
@@ -283,66 +311,94 @@ class ShallowRegressionLSTM(nn.Module):
 
         return out
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Distbelief training example')
-
-    parser.add_argument('--ip', type=str, default='127.0.0.1')
-    parser.add_argument('--port', type=str, default='3002')
-    parser.add_argument('--world_size', type=int)
-    parser.add_argument('--client_id', type=int)
-    args = parser.parse_args()
-
-    model = ShallowRegressionLSTM(num_sensors=11, hidden_units=16)
-    criterion = nn.MSELoss()
-
-    handler = AsyncParameterServerHandler(model, alpha=0.5, total_time=5)
-
-    network = DistNetwork(address=(args.ip, args.port),
-                          world_size=args.world_size,
-                          rank=0)
-
-    Manager = AsynchronousServerManager(handler=handler, network=network)
-
-    Manager.run()
+def get_data(client_id):
 
     file_name = "dataset.pkl"
     df = pd.read_pickle(file_name)
 
     '''Choose one dataset for each client'''
-    graph_image_name = ''
-    if args.client_id == 1:
+    if client_id == 1:
         df = df['ElBorn']
-        graph_image_name = 'ElBorn'
-    elif args.client_id == 2:
+    elif client_id == 2:
         df = df['LesCorts']
-        graph_image_name = 'LesCorts'
-    elif args.client_id == 3:
+    elif client_id == 3:
         df = df['PobleSec']
-        graph_image_name = 'PobleSec'
     else:
         print("Number of clients > dataset")
 
     df.set_index(df.iloc[:, 0].name)
     df.index.names = ['TimeStamp']
+
     data_columns = list(df.columns.values)
     data = df[data_columns].values
     data = np.clip(data, 0.0, np.percentile(data.flatten(), 99))  # we use 99% as the threshold
     df[data_columns] = data
+
+    aggregated_time_series = np.sum(data, axis=1)
+    df_ts = pd.DataFrame()
+    df_ts['data'] = aggregated_time_series   # Plot in Mbps
+
+    df = df.assign(aggregated_ts=df_ts['data'].tolist())
+
+    df.fillna(0, inplace=True)
+
+    df_min_max_scaled = df.copy()
+    column = 'aggregated_ts'
+    df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
+            df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
+    #print(df_min_max_scaled)
+    df = df_min_max_scaled
+
+    target_sensor = "aggregated_ts"
+    features = list(df.columns.difference([target_sensor]))
+    forecast_lead = 30
+    target = f"{target_sensor}_lead{forecast_lead}"
+    df[target] = df[target_sensor].shift(-forecast_lead)
+    df = df.iloc[:-forecast_lead]
+    #print(df)
+
+    return df, target
+
+def get_train_test(client_id):
+    file_name = "dataset.pkl"
+    df = pd.read_pickle(file_name)
+
+    '''Choose one dataset for each client'''
+    if client_id == 1:
+        df = df['ElBorn']
+    elif client_id == 2:
+        df = df['LesCorts']
+    elif client_id == 3:
+        df = df['PobleSec']
+    else:
+        print("Number of clients > dataset")
+
+    df.set_index(df.iloc[:, 0].name)
+    df.index.names = ['TimeStamp']
+
+    data_columns = list(df.columns.values)
+    data = df[data_columns].values
+    data = np.clip(data, 0.0, np.percentile(data.flatten(), 99))  # we use 99% as the threshold
+    df[data_columns] = data
+
     aggregated_time_series = np.sum(data, axis=1)
     df_ts = pd.DataFrame()
     df_ts['data'] = aggregated_time_series / 1000  # Plot in Mbps
+
     # df.drop(df.columns[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], axis=1, inplace=True)
     df = df.assign(aggregated_ts=df_ts['data'].tolist())
+
     df.fillna(0, inplace=True)
+
     # Normalizing the aggregated column
     df_min_max_scaled = df.copy()
     column = 'aggregated_ts'
     df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
             df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
     df = df_min_max_scaled
-    # print(df)
     # create_graph(df_min_max_scaled, "DF_Normalized")
     # exit()
+
     target_sensor = "aggregated_ts"
     features = list(df.columns.difference([target_sensor]))
     forecast_lead = 30
@@ -354,65 +410,285 @@ if __name__ == "__main__":
     train_ind = int(len(df) * 0.8)
     df_train = df[:train_ind].copy()
     df_test = df[train_ind:].copy()
-    #print(df_train.head())
-    #print(df_test.head())
+    # print(df_train.head())
+    # print(df_test.head())
     train_length = df_train.shape[0]
     test_length = df_test.shape[0]
-    print('Server: Training size: ', train_length)
-    print('Server: Test size: ', test_length)
-    print('Server: Test ratio: ', test_length / (test_length + train_length))
+    print('Training size: ', train_length)
+    print('Test size: ', test_length)
+    print('Test ratio: ', test_length / (test_length + train_length))
+    return df_train, df_test, train_length, test_length, features, target
 
-    target_mean = df_train[target].mean()
-    target_stdev = df_train[target].std()
-    for c in df_train.columns:
-        mean = df_train[c].mean()
-        stdev = df_train[c].std()
-        df_train[c] = (df_train[c] - mean) / stdev
-        df_test[c] = (df_test[c] - mean) / stdev
+def get_ready_test(client_id):
 
-    # reating the dataset and the data loaders for real
-    torch.manual_seed(101)
+    df, target = get_data(args.client_id)
+
+    history = 24  # input historical time steps
+    horizon = 1  # output predicted time steps
+    test_ratio = 0.2  # testing data ratio
+    max_evals = 1  # maximal trials for hyper parameter tuning
+
+    train_ind = int(len(df) * 0.8)
+    train = df[:train_ind]
+    test = df[train_ind:]
+    # print(train.head())
+    # print(test.head())
+    train_length = train.shape[0]
+    test_length = test.shape[0]
+
+    input_features = [target]
+    data = df[input_features].values
+
+    length = data.shape[0]
+    print(length)
+
+    x_data = []
+    y_data = []
+    for i in range(length - history - horizon + 1):
+        x = data[i:i + history, :]  # input historical time steps
+        y = data[i + history:i + history + horizon:, 0]  # output predicted time steps, we only predict value_avg
+        x_data.append(x)
+        y_data.append(y)
+
+    x_data = np.array(x_data)
+    y_data = np.array(y_data)
+
+    x_data = np.swapaxes(x_data, 1, 2)
+
+    test_length = test_length - horizon + 1
+
+    train_valid_length = x_data.shape[0] - test_length
+
+    train_length = int(train_valid_length * 0.8)
+    valid_length = train_valid_length - train_length
+
+    X_train = x_data[:train_length]
+    y_train = y_data[:train_length]
+    X_valid = x_data[train_length:train_valid_length]
+    y_valid = y_data[train_length:train_valid_length]
+    X_test = x_data[train_valid_length:]
+    y_test = y_data[train_valid_length:]
+
+    print("Train Size X: " + str(X_train.shape))
+    print("Train Size Y: " + str(y_train.shape))
+    print("Valid Size X: " + str(X_valid.shape))
+    print("Valid Size Y: " + str(y_valid.shape))
+    print("Test Size X: " + str(X_test.shape))
+    print("Test Size Y: " + str(y_test.shape))
+    return X_test, y_test, target
+
+def get_ready(client_id):
+    history = 24  # input historical time steps
+    horizon = 1  # output predicted time steps
+    test_ratio = 0.2  # testing data ratio
+    max_evals = 1  # maximal trials for hyper parameter tuning
+
+    df, target = get_data(client_id)
+
+    train_ind = int(len(df) * 0.8)
+    train = df[:train_ind]
+    test = df[train_ind:]
+    #print(train.head())
+    #print(test.head())
+    train_length = train.shape[0]
+    test_length = test.shape[0]
+
+    input_features = [target]
+    data = df[input_features].values
+
+    length = data.shape[0]
+    print(length)
+
+    x_data = []
+    y_data = []
+    for i in range(length - history - horizon + 1):
+        x = data[i:i + history, :]  # input historical time steps
+        y = data[i + history:i + history + horizon:, 0]  # output predicted time steps, we only predict value_avg
+        x_data.append(x)
+        y_data.append(y)
+
+    x_data = np.array(x_data)
+    y_data = np.array(y_data)
+
+    x_data = np.swapaxes(x_data, 1, 2)
+
+    test_length = test_length - horizon + 1
+
+    train_valid_length = x_data.shape[0] - test_length
+
+    train_length = int(train_valid_length * 0.8)
+    valid_length = train_valid_length - train_length
+
+    X_train = x_data[:train_length]
+    y_train = y_data[:train_length]
+    X_valid = x_data[train_length:train_valid_length]
+    y_valid = y_data[train_length:train_valid_length]
+    X_test = x_data[train_valid_length:]
+    y_test = y_data[train_valid_length:]
+
+    print("Train Size X: " + str(X_train.shape))
+    print("Train Size Y: " + str(y_train.shape))
+    print("Valid Size X: " + str(X_valid.shape))
+    print("Valid Size Y: " + str(y_valid.shape))
+    print("Test Size X: " + str(X_test.shape))
+    print("Test Size Y: " + str(y_test.shape))
+
+    X, y, splits = combine_split_data([X_train, X_valid], [y_train, y_valid])
+    tfms = [None, [TSRegression()]]
+    dsets = TSDatasets(X, y, tfms=tfms, splits=splits, inplace=True)
+
+    X, y, splits = combine_split_data([X_train, X_valid], [y_train, y_valid])
 
     batch_size = 32
-    sequence_length = 30
+    tfms = [None, [TSRegression()]]
+    dsets = TSDatasets(X, y, tfms=tfms, splits=splits, inplace=True)
+    # set num_workers for memory bottleneck
+    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=[batch_size, batch_size], num_workers=args.num_workers)
 
-    train_dataset = SequenceDataset(
-        df_train,
-        target=target,
-        features=features,
-        sequence_length=sequence_length
-    )
-    test_dataset = SequenceDataset(
-        df_test,
-        target=target,
-        features=features,
-        sequence_length=sequence_length
-    )
+    if model_name == "ResCNN":
+        arch = ResCNN
+    k = {
+        'layers': 25,
+        'ks': 5,
+        'conv_dropout': 0.5
+    }
+    model = create_model(arch, d=False, dls=dls)
+    model = nn.Sequential(model, nn.Sigmoid())
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    return dsets, model, dls
 
-    train_eval_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Distbelief training example')
 
-    ystar_col = "Model forecast"
-    df_train[ystar_col] = predict(train_eval_loader, model).numpy()
-    df_test[ystar_col] = predict(test_loader, model).numpy()
+    parser.add_argument('--ip', type=str, default='127.0.0.1')
+    parser.add_argument('--port', type=str, default='3002')
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--world_size', type=int)
+    parser.add_argument('--client_id', type=int)
+    parser.add_argument('--batch_size', type=int)
+    args = parser.parse_args()
 
-    df_out = pd.concat((df_train, df_test))[[target, ystar_col]]
+    #model = ShallowRegressionLSTM(num_sensors=11, hidden_units=16)
+    dsets, model, dls = get_ready(args.client_id)
+    handler = AsyncParameterServerHandler(model, alpha=0.5, total_time=5)
 
-    for c in df_out.columns:
-        df_out[c] = df_out[c] * target_stdev + target_mean
+    network = DistNetwork(address=(args.ip, args.port),
+                          world_size=args.world_size,
+                          rank=0)
+    Manager = AsynchronousServerManager(handler=handler, network=network)
+    Manager.run()
+    print("Passououuuuuiuiuiu")
 
-
-    df_out.rename(columns={df_out.columns[0]: "Real"}, inplace=True)  # Rename Pandas Dataframe
-    plot_real_pred_detailed(df_out, "LSTM", graph_image_name)
-    plot_real_pred_alone(df_out.iloc[:, :-1], "LSTM", train_ind, graph_image_name)
-    check_error(df_out[['Real']].to_numpy(), df_out[['Model forecast']].to_numpy(), name_col="LSTM")
-    #create_loss_graph(train_loss, test_loss, "LSTM")
-
-    for c in df_out.columns:
-        df_out[c] = df_out[c] * target_stdev + target_mean
-
+    params = {'batch_size': args.batch_size, 'epochs': 30, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25], 'optimizer': Adam, 'patience': 10}
 
 
+    train, test, train_length, test_length, features, target = get_train_test(args.client_id)
 
+    history = 24  # input historical time steps
+    horizon = 1  # output predicted time steps
+    test_ratio = 0.2  # testing data ratio
+    max_evals = 1  # maximal trials for hyper parameter tuning
+
+    learn = Learner(dls, model, metrics=[mae, rmse], opt_func=params['optimizer'])
+    valid_dl = dls.valid
+    X_test, y_test, target = get_ready_test(args.client_id)
+
+    test_ds = valid_dl.dataset.add_test(X_test, y_test)  # use the test data
+    test_dl = valid_dl.new(test_ds)
+
+    start = time.time()
+    test_probas, test_targets, test_preds = learn.get_preds(dl=test_dl, with_decoded=True, save_preds=None, save_targs=None)
+    prediction_time = time.time() - start
+    test_probas, test_targets, test_preds
+
+    y_true = test_targets.numpy()
+    y_pred = test_preds.numpy()
+
+    y_true = y_true.reshape(y_true.shape[0], horizon, -1)
+    y_pred = y_pred.reshape(y_pred.shape[0], horizon, -1)
+
+    print("Y_true: "+str(y_true.shape))
+    print("Y_pred: "+str(y_pred.shape))
+
+    """
+    The training and test time spent:
+    """
+
+    # %%
+    training_time = time.time() - start
+    print('(Server) Taining time (in seconds): ', training_time)
+    print('(Server) Test time (in seconds): ', prediction_time)
+
+
+    # %%
+    def check_error(orig, pred, name_col='', index_name=''):
+        bias = np.mean(orig - pred)
+        mse = mean_squared_error(orig, pred)
+        rmse = sqrt(mean_squared_error(orig, pred))
+        mae = mean_absolute_error(orig, pred)
+        mape = np.mean(np.abs((orig - pred) / orig)) * 100
+
+        error_group = [bias, mse, rmse, mae, mape]
+        result = pd.DataFrame(error_group, index=['BIAS', 'MSE', 'RMSE', 'MAE', 'MAPE'], columns=[name_col])
+        result.index.name = index_name
+        print("Result: " + str(result))
+
+        text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_SERVER_error_measurement.txt", "w")
+        n = text_file.write(str(result))
+        text_file.close()
+
+        return result
+
+
+    # %%
+    step_to_evalute = 0
+    true_values = y_true[:, step_to_evalute]
+    pred_values = y_pred[:, step_to_evalute]
+
+    # %%
+    result = pd.DataFrame()
+
+    # %%
+    check_error(true_values, pred_values, name_col=model_name)
+
+
+    # %%
+    def plot_error(data, figsize=(12, 9), lags=24, rotation=0):
+        # Creating the column error
+        data['Error'] = data.iloc[:, 0] - data.iloc[:, 1]
+
+        plt.figure(figsize=figsize)
+        ax1 = plt.subplot2grid((2, 2), (0, 0))
+        ax2 = plt.subplot2grid((2, 2), (0, 1))
+        ax3 = plt.subplot2grid((2, 2), (1, 0))
+        ax4 = plt.subplot2grid((2, 2), (1, 1))
+
+        # Plotting actual and predicted values
+        ax1.plot(data.iloc[:, 0:2])
+        ax1.legend(['Real', 'Pred'])
+        ax1.set_title('Real Value vs Prediction')
+        ax1.xaxis.set_tick_params(rotation=rotation)
+
+        # Error vs Predicted value
+        ax2.scatter(data.iloc[:, 1], data.iloc[:, 2])
+        ax2.set_xlabel('Predicted Values')
+        ax2.set_ylabel('Residual')
+        ax2.set_title('Residual vs Predicted Values')
+
+        # Residual QQ Plot
+        sm.graphics.qqplot(data.iloc[:, 2], line='r', ax=ax3)
+
+        # Autocorrelation Plot of residual
+        plot_acf(data.iloc[:, 2], lags=lags, zero=False, ax=ax4)
+        plt.tight_layout()
+        #plt.show()
+        plt.savefig("Resultados/"+str(model_name)+"/" + str(model_name) + str("_SERVER_")+str(args.client_id)+'_autoCorrelation.png', bbox_inches='tight', pad_inches=0.1)
+
+
+    model_test = test[[target]].copy()
+    model_test.index = test.index
+    model_test.columns = ['Real']
+
+    model_test['Pred'] = pred_values
+
+    plot_error(model_test, rotation=45)
