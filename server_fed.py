@@ -58,7 +58,7 @@ import tsai
 from tsai.all import *
 
 
-model_name = "ResCNN"
+model_name = "InceptionTime"
 
 pio.templates.default = "plotly_white"
 
@@ -547,13 +547,14 @@ def get_ready(client_id):
 
     if model_name == "ResCNN":
         arch = ResCNN
-    k = {
-        'layers': 25,
-        'ks': 5,
-        'conv_dropout': 0.5
-    }
+    elif model_name == "InceptionTime":
+        arch = InceptionTime
+    elif model_name == "ResNET":
+        arch = ResNet
     model = create_model(arch, d=False, dls=dls)
-    model = nn.Sequential(model, nn.Sigmoid())
+    # model = nn.Sequential(model, nn.Sigmoid())
+
+    return dsets, model, dls
 
     return dsets, model, dls
 
@@ -576,11 +577,12 @@ if __name__ == "__main__":
                           world_size=args.world_size,
                           rank=0)
     Manager = AsynchronousServerManager(handler=handler, network=network)
+
     Manager.run()
-    print("Passououuuuuiuiuiu")
 
-    params = {'batch_size': args.batch_size, 'epochs': 30, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25], 'optimizer': Adam, 'patience': 10}
-
+    params = {'batch_size': args.batch_size, 'epochs': 30, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25],
+              'optimizer': SGD,
+              'patience': 10}
 
     train, test, train_length, test_length, features, target = get_train_test(args.client_id)
 
@@ -589,17 +591,19 @@ if __name__ == "__main__":
     test_ratio = 0.2  # testing data ratio
     max_evals = 1  # maximal trials for hyper parameter tuning
 
-    learn = Learner(dls, model, metrics=[mae, rmse], opt_func=params['optimizer'])
+    learn = Learner(dls, model, metrics=[mse], opt_func=params['optimizer'])
     valid_dl = dls.valid
+
     X_test, y_test, target = get_ready_test(args.client_id)
 
     test_ds = valid_dl.dataset.add_test(X_test, y_test)  # use the test data
     test_dl = valid_dl.new(test_ds)
 
+
     start = time.time()
-    test_probas, test_targets, test_preds = learn.get_preds(dl=test_dl, with_decoded=True, save_preds=None, save_targs=None)
+    test_probas, test_targets, test_preds = learn.get_preds(dl=test_dl, with_decoded=True, save_preds=None,
+                                                            save_targs=None)
     prediction_time = time.time() - start
-    test_probas, test_targets, test_preds
 
     y_true = test_targets.numpy()
     y_pred = test_preds.numpy()
@@ -607,18 +611,8 @@ if __name__ == "__main__":
     y_true = y_true.reshape(y_true.shape[0], horizon, -1)
     y_pred = y_pred.reshape(y_pred.shape[0], horizon, -1)
 
-    print("Y_true: "+str(y_true.shape))
-    print("Y_pred: "+str(y_pred.shape))
-
-    """
-    The training and test time spent:
-    """
-
-    # %%
-    training_time = time.time() - start
-    print('(Server) Taining time (in seconds): ', training_time)
-    print('(Server) Test time (in seconds): ', prediction_time)
-
+    print("Y_true: " + str(y_true.shape))
+    print("Y_pred: " + str(y_pred.shape))
 
     # %%
     def check_error(orig, pred, name_col='', index_name=''):
@@ -631,9 +625,10 @@ if __name__ == "__main__":
         error_group = [bias, mse, rmse, mae, mape]
         result = pd.DataFrame(error_group, index=['BIAS', 'MSE', 'RMSE', 'MAE', 'MAPE'], columns=[name_col])
         result.index.name = index_name
-        print("Result: " + str(result))
+        print("SERVER - Result: " + str(result))
 
-        text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_SERVER_error_measurement.txt", "w")
+        text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_CLIENT-" + str(
+            args.client_id) + "_error_measurement.txt", "w")
         n = text_file.write(str(result))
         text_file.close()
 
@@ -645,8 +640,6 @@ if __name__ == "__main__":
     true_values = y_true[:, step_to_evalute]
     pred_values = y_pred[:, step_to_evalute]
 
-    # %%
-    result = pd.DataFrame()
 
     # %%
     check_error(true_values, pred_values, name_col=model_name)
@@ -681,14 +674,14 @@ if __name__ == "__main__":
         # Autocorrelation Plot of residual
         plot_acf(data.iloc[:, 2], lags=lags, zero=False, ax=ax4)
         plt.tight_layout()
-        #plt.show()
-        plt.savefig("Resultados/"+str(model_name)+"/" + str(model_name) + str("_SERVER_")+str(args.client_id)+'_autoCorrelation.png', bbox_inches='tight', pad_inches=0.1)
-
+        # plt.show()
+        plt.savefig("Resultados/" + str(model_name) + "/" + str(model_name) + str("_SERVER_") + str(
+            args.client_id) + '_autoCorrelation.png', bbox_inches='tight', pad_inches=0.1)
 
     model_test = test[[target]].copy()
     model_test.index = test.index
     model_test.columns = ['Real']
 
     model_test['Pred'] = pred_values
-
     plot_error(model_test, rotation=45)
+    print("Server: " + str(" finished its work"))
