@@ -60,7 +60,7 @@ from torch.utils.data import DataLoader
 import tsai
 from tsai.all import *
 
-model_name = "InceptionTime"
+model_name = "OmniScaleCNN"
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 LOGGER = Logger(log_name="client " + str(1))
@@ -170,7 +170,8 @@ def get_data(client_id):
     target = f"{target_sensor}_lead{forecast_lead}"
     df[target] = df[target_sensor].shift(-forecast_lead)
     df = df.iloc[:-forecast_lead]
-    # print(df)
+    #print(df)
+
 
     return df, target
 
@@ -587,8 +588,10 @@ def get_ready(client_id):
         arch = InceptionTime
     elif model_name == "ResNET":
         arch = ResNet
+    elif model_name == "OmniScaleCNN":
+        arch = OmniScaleCNN
     model = create_model(arch, d=False, dls=dls)
-    #model = nn.Sequential(model, nn.Sigmoid())
+    model = nn.Sequential(model, nn.Sigmoid())
 
     return dsets, model, dls
 

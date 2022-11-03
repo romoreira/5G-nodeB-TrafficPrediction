@@ -58,7 +58,7 @@ import tsai
 from tsai.all import *
 
 
-model_name = "InceptionTime"
+model_name = "OmniScaleCNN"
 
 pio.templates.default = "plotly_white"
 
@@ -551,10 +551,10 @@ def get_ready(client_id):
         arch = InceptionTime
     elif model_name == "ResNET":
         arch = ResNet
+    elif model_name == "OmniScaleCNN":
+        arch = OmniScaleCNN
     model = create_model(arch, d=False, dls=dls)
-    # model = nn.Sequential(model, nn.Sigmoid())
-
-    return dsets, model, dls
+    model = nn.Sequential(model, nn.Sigmoid())
 
     return dsets, model, dls
 
@@ -579,6 +579,8 @@ if __name__ == "__main__":
     Manager = AsynchronousServerManager(handler=handler, network=network)
 
     Manager.run()
+    import time
+    time.sleep(60)
 
     params = {'batch_size': args.batch_size, 'epochs': 30, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25],
               'optimizer': SGD,
@@ -627,7 +629,7 @@ if __name__ == "__main__":
         result.index.name = index_name
         print("SERVER - Result: " + str(result))
 
-        text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_CLIENT-" + str(
+        text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_SERVER-" + str(
             args.client_id) + "_error_measurement.txt", "w")
         n = text_file.write(str(result))
         text_file.close()
