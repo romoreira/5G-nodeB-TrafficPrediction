@@ -311,21 +311,7 @@ class ShallowRegressionLSTM(nn.Module):
 
         return out
 
-def get_data(client_id):
-
-    file_name = "dataset.pkl"
-    df = pd.read_pickle(file_name)
-
-    '''Choose one dataset for each client'''
-    if client_id == 1:
-        df = df['ElBorn']
-    elif client_id == 2:
-        df = df['LesCorts']
-    elif client_id == 3:
-        df = df['PobleSec']
-    else:
-        print("Number of clients > dataset")
-
+def normalize(df):
     df.set_index(df.iloc[:, 0].name)
     df.index.names = ['TimeStamp']
 
@@ -336,7 +322,7 @@ def get_data(client_id):
 
     aggregated_time_series = np.sum(data, axis=1)
     df_ts = pd.DataFrame()
-    df_ts['data'] = aggregated_time_series   # Plot in Mbps
+    df_ts['data'] = aggregated_time_series  # Plot in Mbps
 
     df = df.assign(aggregated_ts=df_ts['data'].tolist())
 
@@ -346,7 +332,7 @@ def get_data(client_id):
     column = 'aggregated_ts'
     df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
             df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
-    #print(df_min_max_scaled)
+    # print(df_min_max_scaled)
     df = df_min_max_scaled
 
     target_sensor = "aggregated_ts"
@@ -355,7 +341,43 @@ def get_data(client_id):
     target = f"{target_sensor}_lead{forecast_lead}"
     df[target] = df[target_sensor].shift(-forecast_lead)
     df = df.iloc[:-forecast_lead]
-    #print(df)
+    return df, target, features
+
+def get_data(client_id):
+    file_name = "dataset.pkl"
+    df = pd.read_pickle(file_name)
+
+    df_lescorts = df['LesCorts']
+    #print(df_lescorts.head(1))
+    #print(df_lescorts.tail(1))
+
+    df_poblesec = df['PobleSec']
+    # print(df_poblesec.head(1))
+    # print(df_poblesec.tail(1))
+    df_poblesec = df_poblesec.shift(352, freq='D')
+    #print("After shift")
+    #print(df_poblesec.head(1))
+    #print(df_poblesec.tail(1))
+
+    df_elborn = df['ElBorn']
+    #print(df_elborn.head(1))
+    #print(df_elborn.tail(1))
+    df_elborn = df_elborn.shift(325, freq='D')
+    #print("After shift")
+    #print(df_elborn.head(1))
+    #print(df_elborn.tail(1))
+
+
+    df_elborn, target, features = normalize(df_elborn)
+    df_lescorts, target, features = normalize(df_lescorts)
+    df_poblesec, target, features = normalize(df_poblesec)
+
+
+    df = pd.concat([df_elborn, df_lescorts, df_poblesec]).sort_values('TimeStamp').reset_index(drop=False)
+    df = df.set_index('TimeStamp')
+
+    fig = go.Figure([go.Scatter(x=df, y=df['aggregated_ts_lead30'])])
+    #fig.show()
 
     return df, target
 
@@ -363,48 +385,32 @@ def get_train_test(client_id):
     file_name = "dataset.pkl"
     df = pd.read_pickle(file_name)
 
-    '''Choose one dataset for each client'''
-    if client_id == 1:
-        df = df['ElBorn']
-    elif client_id == 2:
-        df = df['LesCorts']
-    elif client_id == 3:
-        df = df['PobleSec']
-    else:
-        print("Number of clients > dataset")
+    df_lescorts = df['LesCorts']
+    #print(df_lescorts.head(1))
+    #print(df_lescorts.tail(1))
 
-    df.set_index(df.iloc[:, 0].name)
-    df.index.names = ['TimeStamp']
+    df_poblesec = df['PobleSec']
+    # print(df_poblesec.head(1))
+    # print(df_poblesec.tail(1))
+    df_poblesec = df_poblesec.shift(352, freq='D')
+    #print("After shift")
+    #print(df_poblesec.head(1))
+    #print(df_poblesec.tail(1))
 
-    data_columns = list(df.columns.values)
-    data = df[data_columns].values
-    data = np.clip(data, 0.0, np.percentile(data.flatten(), 99))  # we use 99% as the threshold
-    df[data_columns] = data
+    df_elborn = df['ElBorn']
+    # print(df_elborn.head(1))
+    # print(df_elborn.tail(1))
+    df_elborn = df_elborn.shift(325, freq='D')
+    #print("After shift")
+    #print(df_elborn.head(1))
+    #print(df_elborn.tail(1))
 
-    aggregated_time_series = np.sum(data, axis=1)
-    df_ts = pd.DataFrame()
-    df_ts['data'] = aggregated_time_series / 1000  # Plot in Mbps
+    df_elborn, target, features = normalize(df_elborn)
+    df_lescorts, target, features = normalize(df_lescorts)
+    df_poblesec, target, features = normalize(df_poblesec)
 
-    # df.drop(df.columns[[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], axis=1, inplace=True)
-    df = df.assign(aggregated_ts=df_ts['data'].tolist())
-
-    df.fillna(0, inplace=True)
-
-    # Normalizing the aggregated column
-    df_min_max_scaled = df.copy()
-    column = 'aggregated_ts'
-    df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
-            df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
-    df = df_min_max_scaled
-    # create_graph(df_min_max_scaled, "DF_Normalized")
-    # exit()
-
-    target_sensor = "aggregated_ts"
-    features = list(df.columns.difference([target_sensor]))
-    forecast_lead = 30
-    target = f"{target_sensor}_lead{forecast_lead}"
-    df[target] = df[target_sensor].shift(-forecast_lead)
-    df = df.iloc[:-forecast_lead]
+    df = pd.concat([df_elborn, df_lescorts, df_poblesec]).sort_values('TimeStamp').reset_index(drop=False)
+    df = df.set_index('TimeStamp')
 
     # divide data into train and test
     train_ind = int(len(df) * 0.8)
@@ -420,8 +426,7 @@ def get_train_test(client_id):
     return df_train, df_test, train_length, test_length, features, target
 
 def get_ready_test(client_id):
-
-    df, target = get_data(args.client_id)
+    df, target = get_data(client_id)
 
     history = 24  # input historical time steps
     horizon = 1  # output predicted time steps
@@ -485,11 +490,13 @@ def get_ready(client_id):
 
     df, target = get_data(client_id)
 
+    print(df)
+
     train_ind = int(len(df) * 0.8)
     train = df[:train_ind]
     test = df[train_ind:]
-    #print(train.head())
-    #print(test.head())
+    # print(train.head())
+    # print(test.head())
     train_length = train.shape[0]
     test_length = test.shape[0]
 
@@ -537,13 +544,13 @@ def get_ready(client_id):
     tfms = [None, [TSRegression()]]
     dsets = TSDatasets(X, y, tfms=tfms, splits=splits, inplace=True)
 
-    X, y, splits = combine_split_data([X_train, X_valid], [y_train, y_valid])
-
     batch_size = 32
     tfms = [None, [TSRegression()]]
     dsets = TSDatasets(X, y, tfms=tfms, splits=splits, inplace=True)
     # set num_workers for memory bottleneck
     dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=[batch_size, batch_size], num_workers=args.num_workers)
+
+    #trainloader, testloader, df_test = load_data(args.client_id)
 
     if model_name == "ResCNN":
         arch = ResCNN
@@ -554,7 +561,7 @@ def get_ready(client_id):
     elif model_name == "OmniScaleCNN":
         arch = OmniScaleCNN
     model = create_model(arch, d=False, dls=dls)
-    model = nn.Sequential(model, nn.Sigmoid())
+    #model = nn.Sequential(model, nn.Sigmoid())
 
     return dsets, model, dls
 
@@ -567,6 +574,7 @@ if __name__ == "__main__":
     parser.add_argument('--world_size', type=int)
     parser.add_argument('--client_id', type=int)
     parser.add_argument('--batch_size', type=int)
+    parser.add_argument('--epochs', type=int)
     args = parser.parse_args()
 
     #model = ShallowRegressionLSTM(num_sensors=11, hidden_units=16)
@@ -582,7 +590,7 @@ if __name__ == "__main__":
     import time
     time.sleep(60)
 
-    params = {'batch_size': args.batch_size, 'epochs': 30, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25],
+    params = {'batch_size': args.batch_size, 'epochs': args.epochs, 'fc_dropout': 0.1, 'lr': 0.01, 'layers': [25],
               'optimizer': SGD,
               'patience': 10}
 
@@ -593,19 +601,18 @@ if __name__ == "__main__":
     test_ratio = 0.2  # testing data ratio
     max_evals = 1  # maximal trials for hyper parameter tuning
 
-    learn = Learner(dls, model, metrics=[mse], opt_func=params['optimizer'])
+    learn = Learner(dls, model, metrics=[mse, mae, rmse], opt_func=params['optimizer'])
     valid_dl = dls.valid
-
     X_test, y_test, target = get_ready_test(args.client_id)
 
     test_ds = valid_dl.dataset.add_test(X_test, y_test)  # use the test data
     test_dl = valid_dl.new(test_ds)
 
-
     start = time.time()
     test_probas, test_targets, test_preds = learn.get_preds(dl=test_dl, with_decoded=True, save_preds=None,
                                                             save_targs=None)
     prediction_time = time.time() - start
+    test_probas, test_targets, test_preds
 
     y_true = test_targets.numpy()
     y_pred = test_preds.numpy()
@@ -615,6 +622,16 @@ if __name__ == "__main__":
 
     print("Y_true: " + str(y_true.shape))
     print("Y_pred: " + str(y_pred.shape))
+
+    """
+    The training and test time spent:
+    """
+
+    # %%
+    training_time = time.time() - start
+    print('Training time (in seconds): ', training_time)
+    print('Test time (in seconds): ', prediction_time)
+
 
     # %%
     def check_error(orig, pred, name_col='', index_name=''):
@@ -627,7 +644,7 @@ if __name__ == "__main__":
         error_group = [bias, mse, rmse, mae, mape]
         result = pd.DataFrame(error_group, index=['BIAS', 'MSE', 'RMSE', 'MAE', 'MAPE'], columns=[name_col])
         result.index.name = index_name
-        print("SERVER - Result: " + str(result))
+        print("Result: " + str(result))
 
         text_file = open("Resultados/" + str(model_name) + str("/") + str(str(model_name)) + "_SERVER-" + str(
             args.client_id) + "_error_measurement.txt", "w")
@@ -642,6 +659,8 @@ if __name__ == "__main__":
     true_values = y_true[:, step_to_evalute]
     pred_values = y_pred[:, step_to_evalute]
 
+    # %%
+    result = pd.DataFrame()
 
     # %%
     check_error(true_values, pred_values, name_col=model_name)
@@ -679,6 +698,7 @@ if __name__ == "__main__":
         # plt.show()
         plt.savefig("Resultados/" + str(model_name) + "/" + str(model_name) + str("_SERVER_") + str(
             args.client_id) + '_autoCorrelation.png', bbox_inches='tight', pad_inches=0.1)
+
 
     model_test = test[[target]].copy()
     model_test.index = test.index

@@ -1,0 +1,7 @@
+      InceptionTime
+                   
+BIAS       0.006487
+MSE        0.004226
+RMSE       0.065010
+MAE        0.032531
+MAPE            inf
