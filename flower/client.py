@@ -94,7 +94,7 @@ def load_data():
     df_test = df[train_ind:]
 
     # reating the dataset and the data loaders for real
-    torch.manual_seed(101)
+    #torch.manual_seed(101)
 
     batch_size = 32
     sequence_length = 30
@@ -141,6 +141,7 @@ def train(net, trainloader, epochs):
             optimizer.zero_grad()
             loss = criterion(net(images), labels)
             loss.backward()
+            total_loss += loss.item()
             optimizer.step()
             torch.max
     avg_loss = total_loss / 32
