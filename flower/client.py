@@ -1,5 +1,5 @@
 from collections import OrderedDict
-
+import warnings
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -7,9 +7,33 @@ import pandas as pd
 import numpy as np
 import flwr as fl
 from torch.utils.data import Dataset
+import matplotlib.pyplot as plt
+import os
+import argparse
 
+warnings.filterwarnings("ignore", category=UserWarning)
 #DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 DEVICE = torch.device("cpu" if torch.cuda.is_available() else "cpu")
+model_name = "LSTM"
+
+name = './Resultados'
+if os.path.isdir(name) == False:
+    os.mkdir(name)
+
+resultados_dir = './Resultados/' + model_name
+if os.path.isdir(resultados_dir) == False:
+    os.mkdir(resultados_dir)
+
+def create_loss_graph(train_losses, plt_title):
+    # Cria os graficos de decaimento treino e validação (imprime na tela e salva na pasta "./Resultados")
+    plt.title(plt_title)
+    plt.plot(train_losses, label='Train')
+    plt.legend(frameon=False)
+    plt.grid()
+    plt.savefig(resultados_dir + '/' + 'graf_' + str(plt_title) + '.png')
+    plt.close()
+
+
 
 class SequenceDataset(Dataset):
     def __init__(self, dataframe, target, features, sequence_length=5):
@@ -134,18 +158,24 @@ def train(net, trainloader, epochs):
     """Train the network on the training set."""
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-    total_loss = 0
-    for _ in range(epochs):
+    correct, total, epoch_loss = 0, 0, 0.0
+    loss_list = []
+    for epoch in range(epochs):
         for images, labels in trainloader:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             optimizer.zero_grad()
+            outputs = net(images)
             loss = criterion(net(images), labels)
             loss.backward()
-            total_loss += loss.item()
             optimizer.step()
-            torch.max
-    avg_loss = total_loss / 32
-    print(f"Train loss: {avg_loss}")
+            # Metrics
+            epoch_loss += loss
+            total += labels.size(0)
+        epoch_loss /= len(trainloader.dataset)
+        print(f"Epoch {epoch + 1}: train loss {epoch_loss}")
+        loss_list.append(epoch_loss.item())
+    return loss_list
+
 
 def test(net, testloader):
     """Validate the network on the entire test set."""
@@ -160,19 +190,20 @@ def test(net, testloader):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     accuracy = correct / total
+    print(f"Test Loss (AVG): {loss}")
     return loss, accuracy
 
 
 class ShallowRegressionLSTM(nn.Module):
-    def __init__(self, num_sensors, hidden_units):
+    def __init__(self):
         super().__init__()
-        self.num_sensors = num_sensors  # this is the number of features
-        self.hidden_units = hidden_units
+        self.num_sensors = 11  # this is the number of features
+        self.hidden_units = 16
         self.num_layers = 1
 
         self.lstm = nn.LSTM(
-            input_size=num_sensors,
-            hidden_size=hidden_units,
+            input_size=self.num_sensors,
+            hidden_size=self.hidden_units,
             batch_first=True,
             num_layers=self.num_layers
         )
@@ -189,13 +220,11 @@ class ShallowRegressionLSTM(nn.Module):
 
         return out
 
-# Load model and data
-net = ShallowRegressionLSTM(num_sensors=11, hidden_units=16).to(DEVICE)
-trainloader, testloader, num_examples = load_data()
-
-
-
 class FlowerClient(fl.client.NumPyClient):
+
+    losses_train = []
+    losses_test = []
+
     def get_parameters(self, config):
         return [val.cpu().numpy() for _, val in net.state_dict().items()]
 
@@ -206,7 +235,7 @@ class FlowerClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-        train(net, trainloader, epochs=1)
+        self.losses_train = train(net, trainloader, epochs=10)
         return self.get_parameters(config={}), len(trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
@@ -214,9 +243,29 @@ class FlowerClient(fl.client.NumPyClient):
         loss, accuracy = test(net, testloader)
         return loss, len(testloader.dataset), {"accuracy": accuracy}
 
+parser = argparse.ArgumentParser(description='Distbelief training example')
+parser.add_argument('--ip', type=str, default='127.0.0.1')
+parser.add_argument('--port', type=str, default='3002')
+parser.add_argument('--world_size', type=int)
+parser.add_argument('--rank', type=int)
+parser.add_argument('--client_id', type=int, default=1)
+parser.add_argument("--epoch", type=int, default=30)
+parser.add_argument("--lr", type=float, default=0.001)
+parser.add_argument("--cuda", type=bool, default=True)
+parser.add_argument("--num_workers", type=int, default=4)
+parser.add_argument("--batch_size", type=int, default=32)
+args = parser.parse_args()
+
+# Load model and data
+net = ShallowRegressionLSTM().to(DEVICE)
+trainloader, testloader, num_examples = load_data()
+client = FlowerClient()
+
 
 # Start Flower client
 fl.client.start_numpy_client(
     server_address="127.0.0.1:8080",
-    client=FlowerClient(),
+    client=client,
 )
+print("Fim do Cliente: "+str(args.client_id))
+create_loss_graph(client.losses_train, str("Loss Graph Client_"+str(args.client_id)))
