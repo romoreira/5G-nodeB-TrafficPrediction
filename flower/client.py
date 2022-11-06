@@ -180,18 +180,22 @@ def train(net, trainloader, epochs):
 def test(net, testloader):
     """Validate the network on the entire test set."""
     criterion = torch.nn.MSELoss()
-    correct, total, loss = 0, 0, 0.0
+    correct, total, loss_total = 0, 0, 0.0
+    loss_list = []
+    loss = 0
     with torch.no_grad():
         for data in testloader:
             images, labels = data[0].to(DEVICE), data[1].to(DEVICE)
             outputs = net(images)
-            loss += criterion(outputs, labels).item()
+            loss_total += criterion(outputs, labels).item()
             _, predicted = torch.max(outputs.data, 0)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            loss_list.append(loss)
     accuracy = correct / total
     print(f"Test Loss (AVG): {loss}")
-    return loss, accuracy
+    create_loss_graph(loss_list, str("Loss Test_" + str(args.client_id)))
+    return loss, accuracy, loss_list
 
 
 class ShallowRegressionLSTM(nn.Module):
@@ -236,6 +240,7 @@ class FlowerClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         self.set_parameters(parameters)
         self.losses_train = train(net, trainloader, epochs=10)
+        create_loss_graph(self.losses_train, str("Loss Train_" + str(args.client_id)))
         return self.get_parameters(config={}), len(trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
@@ -268,4 +273,3 @@ fl.client.start_numpy_client(
     client=client,
 )
 print("Fim do Cliente: "+str(args.client_id))
-create_loss_graph(client.losses_train, str("Loss Graph Client_"+str(args.client_id)))
