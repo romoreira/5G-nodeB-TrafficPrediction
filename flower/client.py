@@ -10,11 +10,15 @@ from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
 import os
 import argparse
-
 warnings.filterwarnings("ignore", category=UserWarning)
-#DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-DEVICE = torch.device("cpu" if torch.cuda.is_available() else "cpu")
+
+from models.OmniScaleCNN import OmniScaleCNN
+
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 model_name = "LSTM"
+
+
 
 name = './Resultados'
 if os.path.isdir(name) == False:
@@ -24,11 +28,15 @@ resultados_dir = './Resultados/' + model_name
 if os.path.isdir(resultados_dir) == False:
     os.mkdir(resultados_dir)
 
-def create_loss_graph(train_losses, plt_title):
+def create_loss_graph(train_losses, test_losses, plt_title):
     # Cria os graficos de decaimento treino e validação (imprime na tela e salva na pasta "./Resultados")
-    plt.title(plt_title)
+    plt.title("Training and Test Loss")
     plt.plot(train_losses, label='Train')
+    plt.plot(test_losses, label='Test')
     plt.legend(frameon=False)
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
     plt.grid()
     plt.savefig(resultados_dir + '/' + 'graf_' + str(plt_title) + '.png')
     plt.close()
@@ -57,7 +65,7 @@ class SequenceDataset(Dataset):
 
         return x, self.y[i]
 
-def load_data():
+def load_data(client_id):
     """
     transform = transforms.Compose(
     [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
@@ -71,9 +79,18 @@ def load_data():
     """
 
     file_name = "../fedlab/dataset.pkl"
-
     df = pd.read_pickle(file_name)
-    df = df['LesCorts']
+
+    '''Choose one dataset for each client'''
+    if client_id == 1:
+        df = df['ElBorn']
+    elif client_id == 2:
+        df = df['LesCorts']
+    elif client_id == 3:
+        df = df['PobleSec']
+    else:
+        print("Number of clients > dataset")
+
     df.set_index(df.iloc[:, 0].name)
     df.index.names = ['TimeStamp']
 
@@ -160,17 +177,18 @@ def train(net, trainloader, epochs):
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     correct, total, epoch_loss = 0, 0, 0.0
     loss_list = []
+    print("Len trainloader"+ str(len(trainloader)))
     for epoch in range(epochs):
-        for images, labels in trainloader:
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
+        for inputs, targets in trainloader:
+            inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
             optimizer.zero_grad()
-            outputs = net(images)
-            loss = criterion(net(images), labels)
+            outputs = net(inputs)
+            loss = criterion(net(inputs), targets)
             loss.backward()
             optimizer.step()
             # Metrics
             epoch_loss += loss
-            total += labels.size(0)
+            total += targets.size(0)
         epoch_loss /= len(trainloader.dataset)
         print(f"Epoch {epoch + 1}: train loss {epoch_loss}")
         loss_list.append(epoch_loss.item())
@@ -182,7 +200,6 @@ def test(net, testloader):
     criterion = torch.nn.MSELoss()
     correct, total, loss_total = 0, 0, 0.0
     loss_list = []
-    loss = 0
     with torch.no_grad():
         for data in testloader:
             images, labels = data[0].to(DEVICE), data[1].to(DEVICE)
@@ -191,11 +208,11 @@ def test(net, testloader):
             _, predicted = torch.max(outputs.data, 0)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            loss = criterion(outputs, labels).item()
             loss_list.append(loss)
     accuracy = correct / total
-    print(f"Test Loss (AVG): {loss}")
-    create_loss_graph(loss_list, str("Loss Test_" + str(args.client_id)))
-    return loss, accuracy, loss_list
+    print(f"Test Loss (AVG): {loss_total}")
+    return loss_total, accuracy, loss_list
 
 
 class ShallowRegressionLSTM(nn.Module):
@@ -216,8 +233,8 @@ class ShallowRegressionLSTM(nn.Module):
 
     def forward(self, x):
         batch_size = x.shape[0]
-        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_units).requires_grad_()
-        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_units).requires_grad_()
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_units, device=DEVICE).requires_grad_()
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_units, device=DEVICE).requires_grad_()
 
         _, (hn, _) = self.lstm(x, (h0, c0))
         out = self.linear(hn[0]).flatten()  # First dim of Hn is num_layers, which is set to 1 above.
@@ -239,13 +256,12 @@ class FlowerClient(fl.client.NumPyClient):
 
     def fit(self, parameters, config):
         self.set_parameters(parameters)
-        self.losses_train = train(net, trainloader, epochs=10)
-        create_loss_graph(self.losses_train, str("Loss Train_" + str(args.client_id)))
+        self.losses_train = train(net, trainloader, epochs=args.epoch)
         return self.get_parameters(config={}), len(trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
-        loss, accuracy = test(net, testloader)
+        loss, accuracy, self.losses_test = test(net, testloader)
         return loss, len(testloader.dataset), {"accuracy": accuracy}
 
 parser = argparse.ArgumentParser(description='Distbelief training example')
@@ -261,15 +277,28 @@ parser.add_argument("--num_workers", type=int, default=4)
 parser.add_argument("--batch_size", type=int, default=32)
 args = parser.parse_args()
 
-# Load model and data
-net = ShallowRegressionLSTM().to(DEVICE)
-trainloader, testloader, num_examples = load_data()
-client = FlowerClient()
 
+def get_model(model_name):
+    if model_name == "OmniScaleCNN":
+        c_in = 30
+        seq_len = 11
+        c_out = 32
+        model = OmniScaleCNN(c_in, c_out, seq_len)
+        return model
+    elif model_name == "LSTM":
+        model = ShallowRegressionLSTM()
+        return model
+
+# Load model and data
+net = get_model("OmniScaleCNN")
+net.cuda()
+trainloader, testloader, num_examples = load_data(args.client_id)
+client = FlowerClient()
 
 # Start Flower client
 fl.client.start_numpy_client(
     server_address="127.0.0.1:8080",
     client=client,
 )
-print("Fim do Cliente: "+str(args.client_id))
+create_loss_graph(client.losses_train, [], str("Loss Train" + str(args.client_id)))
+
