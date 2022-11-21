@@ -196,23 +196,24 @@ def test(net, testloader):
     """Validate the model on the test set."""
     criterion = torch.nn.MSELoss()
     correct, total, loss = 0, 0, 0.0
+    predicted_result = []
     with torch.no_grad():
         for images, labels in tqdm(testloader):
             outputs = net(images.to(DEVICE))
             labels = labels.to(DEVICE)
-            print("OUTPUTS: "+str(len(outputs)))
-            print("LABELS: " +str(len(labels)))
             if len(outputs) == 5:
                 break
             loss += criterion(outputs, labels).item()
             total += labels.to(DEVICE).size(0)
-            predicted = torch.max(outputs.data, 0)
+            predicted = torch.max(outputs.data, 0)[0]
             print("PREDICTED: "+str(predicted))
             print("LABELS: "+str(labels))
-            correct += (predicted == labels.to(DEVICE)).sum().item()
+            correct += 1
+            predicted_result.extend(predicted)
     print("LOSS: "+str(loss/len(testloader.dataset)))
     print("CORRECT: "+str(correct/total))
-    return loss/len(testloader.dataset), correct/total
+    print("PREDICTED: "+str(predicted_result))
+    return loss/len(testloader.dataset), correct/total, predicted_result
 
 
 
@@ -263,7 +264,7 @@ class FlowerClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
-        loss, accuracy = test(net, testloader)
+        loss, accuracy, predicted = test(net, testloader)
         return loss, len(testloader.dataset), {"accuracy": accuracy}
 
 parser = argparse.ArgumentParser(description='Distbelief training example')
@@ -296,6 +297,7 @@ net = get_model(model_name)
 net.cuda()
 trainloader, testloader, num_examples = load_data(args.client_id)
 client = FlowerClient()
+
 
 # Start Flower client
 fl.client.start_numpy_client(
