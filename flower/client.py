@@ -10,13 +10,14 @@ from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
 import os
 import argparse
+from tqdm import tqdm
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from models.OmniScaleCNN import OmniScaleCNN
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_name = "LSTM"
+model_name = "OmniScaleCNN"
 
 
 
@@ -44,7 +45,7 @@ def create_loss_graph(train_losses, test_losses, plt_title):
 
 
 class SequenceDataset(Dataset):
-    def __init__(self, dataframe, target, features, sequence_length=5):
+    def __init__(self, dataframe, target, features, sequence_length=30):
         self.features = features
         self.target = target
         self.sequence_length = sequence_length
@@ -137,7 +138,7 @@ def load_data(client_id):
     # reating the dataset and the data loaders for real
     #torch.manual_seed(101)
 
-    batch_size = 32
+    batch_size = 8
     sequence_length = 30
 
     train_dataset = SequenceDataset(
@@ -172,47 +173,47 @@ def load_data(client_id):
 
 
 def train(net, trainloader, epochs):
-    """Train the network on the training set."""
+    """Train the model on the training set."""
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-    correct, total, epoch_loss = 0, 0, 0.0
+    optimizer = torch.optim.SGD(net.parameters(), lr=0.1, momentum=0.9)
     loss_list = []
-    print("Len trainloader"+ str(len(trainloader)))
+    epoch_loss = 0.0
     for epoch in range(epochs):
-        for inputs, targets in trainloader:
-            inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+        for images, labels in tqdm(trainloader):
             optimizer.zero_grad()
-            outputs = net(inputs)
-            loss = criterion(net(inputs), targets)
+            loss = criterion(net(images.to(DEVICE)), labels.to(DEVICE))
             loss.backward()
             optimizer.step()
-            # Metrics
             epoch_loss += loss
-            total += targets.size(0)
         epoch_loss /= len(trainloader.dataset)
         print(f"Epoch {epoch + 1}: train loss {epoch_loss}")
         loss_list.append(epoch_loss.item())
+    print(loss_list)
     return loss_list
 
 
 def test(net, testloader):
-    """Validate the network on the entire test set."""
+    """Validate the model on the test set."""
     criterion = torch.nn.MSELoss()
-    correct, total, loss_total = 0, 0, 0.0
-    loss_list = []
+    correct, total, loss = 0, 0, 0.0
     with torch.no_grad():
-        for data in testloader:
-            images, labels = data[0].to(DEVICE), data[1].to(DEVICE)
-            outputs = net(images)
-            loss_total += criterion(outputs, labels).item()
-            _, predicted = torch.max(outputs.data, 0)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-            loss = criterion(outputs, labels).item()
-            loss_list.append(loss)
-    accuracy = correct / total
-    print(f"Test Loss (AVG): {loss_total}")
-    return loss_total, accuracy, loss_list
+        for images, labels in tqdm(testloader):
+            outputs = net(images.to(DEVICE))
+            labels = labels.to(DEVICE)
+            print("OUTPUTS: "+str(len(outputs)))
+            print("LABELS: " +str(len(labels)))
+            if len(outputs) == 5:
+                break
+            loss += criterion(outputs, labels).item()
+            total += labels.to(DEVICE).size(0)
+            predicted = torch.max(outputs.data, 0)
+            print("PREDICTED: "+str(predicted))
+            print("LABELS: "+str(labels))
+            correct += (predicted == labels.to(DEVICE)).sum().item()
+    print("LOSS: "+str(loss/len(testloader.dataset)))
+    print("CORRECT: "+str(correct/total))
+    return loss/len(testloader.dataset), correct/total
+
 
 
 class ShallowRegressionLSTM(nn.Module):
@@ -257,11 +258,12 @@ class FlowerClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         self.set_parameters(parameters)
         self.losses_train = train(net, trainloader, epochs=args.epoch)
+        print("SELF TRAIN: "+str(self.losses_train))
         return self.get_parameters(config={}), len(trainloader.dataset), {}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
-        loss, accuracy, self.losses_test = test(net, testloader)
+        loss, accuracy = test(net, testloader)
         return loss, len(testloader.dataset), {"accuracy": accuracy}
 
 parser = argparse.ArgumentParser(description='Distbelief training example')
@@ -274,7 +276,7 @@ parser.add_argument("--epoch", type=int, default=30)
 parser.add_argument("--lr", type=float, default=0.001)
 parser.add_argument("--cuda", type=bool, default=True)
 parser.add_argument("--num_workers", type=int, default=4)
-parser.add_argument("--batch_size", type=int, default=32)
+parser.add_argument("--batch_size", type=int, default=8)
 args = parser.parse_args()
 
 
@@ -282,7 +284,7 @@ def get_model(model_name):
     if model_name == "OmniScaleCNN":
         c_in = 30
         seq_len = 11
-        c_out = 32
+        c_out = 8
         model = OmniScaleCNN(c_in, c_out, seq_len)
         return model
     elif model_name == "LSTM":
@@ -290,7 +292,7 @@ def get_model(model_name):
         return model
 
 # Load model and data
-net = get_model("OmniScaleCNN")
+net = get_model(model_name)
 net.cuda()
 trainloader, testloader, num_examples = load_data(args.client_id)
 client = FlowerClient()

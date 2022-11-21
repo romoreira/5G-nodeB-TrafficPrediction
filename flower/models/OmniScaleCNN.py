@@ -53,7 +53,7 @@ class OmniScaleCNN(nn.Module):
     def __init__(self, c_in, c_out, seq_len, layers=[8 * 128, 5 * 128 * 256 + 2 * 256 * 128], few_shot=False):
         super().__init__()
         receptive_field_shape = seq_len//4
-        layer_parameter_list = generate_layer_parameter_list(1,receptive_field_shape, layers, in_channel=c_in)
+        layer_parameter_list = generate_layer_parameter_list(1, receptive_field_shape, layers, in_channel=c_in)
         self.few_shot = few_shot
         self.layer_parameter_list = layer_parameter_list
         self.layer_list = []
