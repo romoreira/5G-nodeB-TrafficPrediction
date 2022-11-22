@@ -13,6 +13,8 @@ import argparse
 from tqdm import tqdm
 warnings.filterwarnings("ignore", category=UserWarning)
 
+from sklearn.preprocessing import MinMaxScaler
+
 from models.OmniScaleCNN import OmniScaleCNN
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,6 +31,33 @@ resultados_dir = './Resultados/' + model_name
 if os.path.isdir(resultados_dir) == False:
     os.mkdir(resultados_dir)
 
+def get_train_test(client_id, df):
+
+    target = "aggregated_ts_lead30"
+
+    # divide data into train and test
+    train_ind = int(len(df) * 0.8)
+    df_train = df[:train_ind].copy()
+    df_test = df[train_ind:].copy()
+    # print(df_train.head())
+    # print(df_test.head())
+    train_length = df_train.shape[0]
+    test_length = df_test.shape[0]
+    print('Training size: ', train_length)
+    print('Test size: ', test_length)
+    print('Test ratio: ', test_length / (test_length + train_length))
+    return df_train, df_test, train_length, test_length, target
+
+def min_max_scaler(df):
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    df['aggregated_ts_lead30'] = scaler.fit_transform(df['aggregated_ts_lead30'].values.reshape(-1, 1)).flatten()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(df['aggregated_ts_lead30'])
+    plt.show()
+    return df
+
+
 def create_loss_graph(train_losses, test_losses, plt_title):
     # Cria os graficos de decaimento treino e validação (imprime na tela e salva na pasta "./Resultados")
     plt.title("Training and Test Loss")
@@ -42,6 +71,13 @@ def create_loss_graph(train_losses, test_losses, plt_title):
     plt.savefig(resultados_dir + '/' + 'graf_' + str(plt_title) + '.png')
     plt.close()
 
+def create_plot_real_pred(real, pred):
+    plt.figure()
+    plt.plot(pred, label='predicted')
+    plt.plot(real, label='actual')
+    plt.ylabel('output y')
+    plt.legend()
+    plt.show()
 
 
 class SequenceDataset(Dataset):
@@ -109,19 +145,17 @@ def load_data(client_id):
 
     df.fillna(0, inplace=True)
 
-    print(df)
 
-
-    # Normalizing the aggregated column
-    df_min_max_scaled = df.copy()
-    column = 'aggregated_ts'
-    df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
-            df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
-    print(df_min_max_scaled)
-    df = df_min_max_scaled
-    # print(df)
-    # create_graph(df_min_max_scaled, "DF_Normalized")
-    # exit()
+    # # Normalizing the aggregated column
+    # df_min_max_scaled = df.copy()
+    # column = 'aggregated_ts'
+    # df_min_max_scaled[column] = (df_min_max_scaled[column] - df_min_max_scaled[column].min()) / (
+    #         df_min_max_scaled[column].max() - df_min_max_scaled[column].min())
+    # print(df_min_max_scaled)
+    # df = df_min_max_scaled
+    # # print(df)
+    # # create_graph(df_min_max_scaled, "DF_Normalized")
+    # # exit()
 
     target_sensor = "aggregated_ts"
     features = list(df.columns.difference([target_sensor]))
@@ -130,6 +164,8 @@ def load_data(client_id):
     df[target] = df[target_sensor].shift(-forecast_lead)
     df = df.iloc[:-forecast_lead]
     print(df)
+
+    df = min_max_scaler(df)  # Normaliza entre 0 e 1 o dataframe
 
     train_ind = int(len(df) * 0.8)
     df_train = df[:train_ind]
@@ -169,17 +205,19 @@ def load_data(client_id):
     print("Target shape:", y.shape)
     print("Num. Examples: ", num_examples)
 
-    return trainloader, testloader, num_examples
+    return trainloader, testloader, num_examples, df
 
 
 def train(net, trainloader, epochs):
     """Train the model on the training set."""
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.SGD(net.parameters(), lr=0.1, momentum=0.9)
+    optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
     loss_list = []
     epoch_loss = 0.0
     for epoch in range(epochs):
         for images, labels in tqdm(trainloader):
+            outputs = net(images.float().to(DEVICE))
+            #print("OUTPUTS TRAINING: "+str(outputs.data))
             optimizer.zero_grad()
             loss = criterion(net(images.to(DEVICE)), labels.to(DEVICE))
             loss.backward()
@@ -196,24 +234,29 @@ def test(net, testloader):
     """Validate the model on the test set."""
     criterion = torch.nn.MSELoss()
     correct, total, loss = 0, 0, 0.0
-    predicted_result = []
+    pred = []
+    real = []
+    i = 0
     with torch.no_grad():
         for images, labels in tqdm(testloader):
-            outputs = net(images.to(DEVICE))
+            outputs = net(images.float().to(DEVICE))
             labels = labels.to(DEVICE)
             if len(outputs) == 5:
                 break
             loss += criterion(outputs, labels).item()
             total += labels.to(DEVICE).size(0)
-            predicted = torch.max(outputs.data, 0)[0]
-            print("PREDICTED: "+str(predicted))
-            print("LABELS: "+str(labels))
+            #print("OUTPUTS: "+str(outputs.data))
+            #predicted = torch.max(outputs.data)
+            predicted = outputs.data
+            #print("REAL: "+str(labels))
+            #print("PREDICTED: "+str(predicted))
+            #print("PREDICTED: " + str(type(predicted)))
+            pred.extend(predicted.cpu().detach().numpy())
+            real.extend(labels.cpu().detach().numpy())
             correct += 1
-            predicted_result.extend(predicted)
     print("LOSS: "+str(loss/len(testloader.dataset)))
     print("CORRECT: "+str(correct/total))
-    print("PREDICTED: "+str(predicted_result))
-    return loss/len(testloader.dataset), correct/total, predicted_result
+    return loss/len(testloader.dataset), correct/total, real, pred
 
 
 
@@ -248,6 +291,9 @@ class FlowerClient(fl.client.NumPyClient):
     losses_train = []
     losses_test = []
 
+    real = []
+    predicted = []
+
     def get_parameters(self, config):
         return [val.cpu().numpy() for _, val in net.state_dict().items()]
 
@@ -264,7 +310,7 @@ class FlowerClient(fl.client.NumPyClient):
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
-        loss, accuracy, predicted = test(net, testloader)
+        loss, accuracy, self.real, self.predicted = test(net, testloader)
         return loss, len(testloader.dataset), {"accuracy": accuracy}
 
 parser = argparse.ArgumentParser(description='Distbelief training example')
@@ -285,7 +331,7 @@ def get_model(model_name):
     if model_name == "OmniScaleCNN":
         c_in = 30
         seq_len = 11
-        c_out = 8
+        c_out = 1
         model = OmniScaleCNN(c_in, c_out, seq_len)
         return model
     elif model_name == "LSTM":
@@ -295,7 +341,7 @@ def get_model(model_name):
 # Load model and data
 net = get_model(model_name)
 net.cuda()
-trainloader, testloader, num_examples = load_data(args.client_id)
+trainloader, testloader, num_examples, df = load_data(args.client_id)
 client = FlowerClient()
 
 
@@ -305,4 +351,7 @@ fl.client.start_numpy_client(
     client=client,
 )
 create_loss_graph(client.losses_train, [], str("Loss Train" + str(args.client_id)))
+print("REAL: "+str(len(client.real)))
+print("PREDICTED: "+str(len(client.predicted)))
+create_plot_real_pred(client.real, client.predicted)
 
