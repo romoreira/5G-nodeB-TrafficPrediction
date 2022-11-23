@@ -31,6 +31,8 @@ resultados_dir = './Resultados/' + model_name
 if os.path.isdir(resultados_dir) == False:
     os.mkdir(resultados_dir)
 
+
+
 def get_train_test(client_id, df):
 
     target = "aggregated_ts_lead30"
