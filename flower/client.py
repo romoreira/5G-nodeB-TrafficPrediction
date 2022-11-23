@@ -31,7 +31,23 @@ resultados_dir = './Resultados/' + model_name
 if os.path.isdir(resultados_dir) == False:
     os.mkdir(resultados_dir)
 
+def build_train_test_graph(df, client_id):
+    train_ind = int(len(df) * 0.8)
+    train = df[:train_ind]
+    test = df[train_ind:]
+    train_length = train.shape[0]
 
+    plt.figure(figsize=[12, 6])
+    plt.plot(df.index[:train_length], df['aggregated_ts_lead30'][:train_length], label='Training', color='navy')
+    plt.plot(df.index[train_length:], df['aggregated_ts_lead30'][train_length:], label='Test', color='orange')
+    plt.axvspan(df.index[train_length:][0], df.index[train_length:][-1], facecolor='r', alpha=0.1)
+
+    plt.xlabel('Time')
+    plt.ylabel('RAN Consumption')
+    plt.legend(loc='upper center')
+    #plt.show()
+    plt.savefig(resultados_dir + '/' + str(model_name) + '_training_test_split'+str("_")+str(client_id)+'.pdf', bbox_inches='tight', pad_inches=0.1)
+    plt.close()
 
 def get_train_test(client_id, df):
 
@@ -62,24 +78,25 @@ def min_max_scaler(df):
 
 def create_loss_graph(train_losses, test_losses, plt_title):
     # Cria os graficos de decaimento treino e validação (imprime na tela e salva na pasta "./Resultados")
-    plt.title("Training and Test Loss")
+    plt.title("Training Loss")
     plt.plot(train_losses, label='Train')
-    plt.plot(test_losses, label='Test')
+    #plt.plot(test_losses, label='Test')
     plt.legend(frameon=False)
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
+    plt.grid(b=None)
     plt.legend()
     plt.grid()
-    plt.savefig(resultados_dir + '/' + 'graf_' + str(plt_title) + '.png')
+    plt.savefig(resultados_dir + '/' + 'graf_' + str(plt_title) + '.pdf')
     plt.close()
 
-def create_plot_real_pred(real, pred):
+def create_plot_real_pred(real, pred, client_id):
     plt.figure()
     plt.plot(pred, label='predicted')
     plt.plot(real, label='actual')
     plt.ylabel('output y')
     plt.legend()
-    plt.show()
+    plt.savefig(resultados_dir + '/' + 'graf_' + str("RealPredict_") + str(client_id) + '.png')
 
 
 class SequenceDataset(Dataset):
@@ -168,6 +185,8 @@ def load_data(client_id):
     print(df)
 
     df = min_max_scaler(df)  # Normaliza entre 0 e 1 o dataframe
+    build_train_test_graph(df, client_id)
+
 
     train_ind = int(len(df) * 0.8)
     df_train = df[:train_ind]
@@ -256,8 +275,8 @@ def test(net, testloader):
             pred.extend(predicted.cpu().detach().numpy())
             real.extend(labels.cpu().detach().numpy())
             correct += 1
-    print("LOSS: "+str(loss/len(testloader.dataset)))
-    print("CORRECT: "+str(correct/total))
+    #print("LOSS: "+str(loss/len(testloader.dataset)))
+    #print("CORRECT: "+str(correct/total))
     return loss/len(testloader.dataset), correct/total, real, pred
 
 
@@ -353,7 +372,5 @@ fl.client.start_numpy_client(
     client=client,
 )
 create_loss_graph(client.losses_train, [], str("Loss Train" + str(args.client_id)))
-print("REAL: "+str(len(client.real)))
-print("PREDICTED: "+str(len(client.predicted)))
-create_plot_real_pred(client.real, client.predicted)
+create_plot_real_pred(client.real, client.predicted, client_id=args.client_id)
 
