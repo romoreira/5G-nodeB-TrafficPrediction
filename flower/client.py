@@ -94,9 +94,10 @@ def create_plot_real_pred(real, pred, client_id):
     plt.figure()
     plt.plot(pred, label='predicted')
     plt.plot(real, label='actual')
-    plt.ylabel('output y')
+    plt.ylabel('RAN Consumption')
+    plt.xlabel('Test Set')
     plt.legend()
-    plt.savefig(resultados_dir + '/' + 'graf_' + str("RealPredict_") + str(client_id) + '.png')
+    plt.savefig(resultados_dir + '/' + 'graf_' + str("RealPredict_") + str(client_id) + '.pdf')
 
 
 class SequenceDataset(Dataset):
